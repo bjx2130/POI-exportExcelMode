@@ -1,0 +1,227 @@
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+import org.apache.poi.hssf.usermodel.HSSFCell;
+import org.apache.poi.hssf.usermodel.HSSFRow;
+import org.apache.poi.hssf.usermodel.HSSFSheet;
+import org.apache.poi.hssf.usermodel.HSSFWorkbook;
+import org.apache.poi.hssf.util.HSSFColor;
+import org.apache.poi.ss.usermodel.CellStyle;
+
+
+public abstract class WriteToExcel {
+	private static final LogUtil log = LogUtil.getLogger(WriteToExcel.class);
+	protected HSSFWorkbook wb;
+	protected HSSFSheet sheet;
+	protected CellStyle tityleStyle;
+	protected String[] titles;
+	protected Integer[] widths;
+
+	private String targetExcelPath;// 文件夹路径
+	private String fileName;// 文件名
+
+	private OutputStream os = null;
+
+	private int numOfrow = 0;
+	private int numOfExcel = 0;
+
+	private int maxSheetNO = 10; // 单个文件最多10个sheet 10 2
+	private int maxRowOfSigleSheet = 60000;// 每个sheet60000条数据 60000
+	private int excelTotalCount = maxRowOfSigleSheet * maxSheetNO; // 每个文件最多excelTotalCount
+																	// maxRowOfSigleSheet*10
+	// 如果单个文件超过>excelTotalCount 会生成多个文件
+	private List<String> excelFileList = new ArrayList<>();
+	private String finalFilePath;
+	private String finalFileName;// 文件名
+
+	private long timestemp = 0;
+	private int fileSeq = 0;
+
+	public String getFinalFilePath() {
+		return finalFilePath;
+	}
+
+	/**
+	 * 
+	 * @param targetExcelPath
+	 *            excel生成的文件路径
+	 */
+	public WriteToExcel(String targetExcelPath, String fileName) {
+		this.targetExcelPath = targetExcelPath;
+		this.fileName = fileName;
+		timestemp = System.currentTimeMillis();
+		this.openExcelFile();
+	}
+
+	public void setmaxRowOfSigleSheet(int maxRowOfSigleSheet) {
+		this.maxRowOfSigleSheet = maxRowOfSigleSheet;
+	}
+
+	private void openExcelFile() {
+		wb = new HSSFWorkbook();
+		this.sheet = wb.createSheet();
+		// 设置标题样式
+		tityleStyle = wb.createCellStyle();
+		tityleStyle.setFillForegroundColor(HSSFColor.GREY_25_PERCENT.index);
+		tityleStyle.setFillPattern(CellStyle.SOLID_FOREGROUND);
+		tityleStyle.setAlignment(CellStyle.ALIGN_CENTER); // 居中
+
+		createTitle();
+
+		try {
+			File ff = Paths.get(this.targetExcelPath, fileName + "_" + timestemp + "_" + (++fileSeq) + ".xls").toFile();
+			if (!ff.exists()) {
+				ff.createNewFile();
+				excelFileList.add(ff.getPath());
+			}
+
+			os = Files.newOutputStream(ff.toPath(), StandardOpenOption.DSYNC);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private void closeExcelFile() {
+		try {
+			this.wb.write(os);
+			this.wb.close();
+			os.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	public void createTitle() {
+		HSSFRow titleRow = sheet.createRow(0);
+		titleRow.setHeight((short) 355);
+
+		this.titles = this.titileArray();
+		this.widths = this.columnwidthArray();
+
+		HSSFCell cell = null;
+		for (int i = 0; i < titles.length; i++) {
+			sheet.setColumnWidth(i, widths[i] * 100);
+			cell = titleRow.createCell(i);
+
+			cell.setCellStyle(tityleStyle);
+			cell.setCellValue(titles[i]);
+
+		}
+	}
+
+	public void writeDataToNextRow(String... vals) {
+
+		this.writeDataToRow(++numOfrow, vals);
+		++numOfExcel;
+
+		if (numOfExcel % excelTotalCount == 0) {
+			this.closeExcelFile();
+			this.openExcelFile();
+			numOfrow = 0;
+		}
+		// 如果当前页的数据等于pageNum，从新创建一个sheet
+		if (numOfrow > 0 && numOfrow % maxRowOfSigleSheet == 0) {
+			this.sheet = wb.createSheet();
+			this.createTitle();
+			numOfrow = 0;
+		}
+
+	}
+
+	public void writeDataToRow(int rowno, Object... vals) {
+
+		HSSFRow row = sheet.createRow(rowno);
+		row.setHeight((short) 355);
+		HSSFCell cell = null;
+		for (int i = 0; i < vals.length; i++) {
+			cell = row.createCell(i);
+			cell.setCellValue(String.valueOf(vals[i]));
+		}
+	}
+
+	public void finishWrite() {
+		try {
+			wb.write(os);
+			wb.close();
+			os.close();
+
+			if (this.excelFileList.size() > 1) {
+				this.finalFilePath = this.excelFileList.get(0).replace("_1.xls", ".zip");
+				clsZipUtils.compressMultipleFiles(this.finalFilePath, this.excelFileList);
+				clsZipUtils.delFile(excelFileList);
+			} else {
+				this.finalFilePath = this.excelFileList.get(0);
+			}
+
+		} catch (Exception e) {
+			log.info("写入Excel文件时异常：" + e.getMessage());
+		}
+	}
+
+	public void creatNewSheet() {
+
+		this.sheet = this.wb.createSheet();
+
+		HSSFRow titleRow = this.sheet.createRow(0);
+		titleRow.setHeight((short) 355);
+		HSSFCell cell = null;
+		for (int i = 0; i < titles.length; i++) {
+			this.sheet.setColumnWidth(i, widths[i] * 100);
+			cell = titleRow.createCell(i);
+
+			cell.setCellStyle(tityleStyle);
+			cell.setCellValue(titles[i]);
+		}
+		numOfrow = 0;
+	}
+
+	public void creatNewSheet(List<String> titles, List<Integer> widths) {
+		if (titles != null)
+			this.updateTitileArray(titles);
+		if (widths != null)
+			this.updateColumnwidthArray(widths);
+
+		this.creatNewSheet();
+
+	}
+
+	private void updateTitileArray(List<String> titles) {
+		this.titles = titles.toArray(new String[titles.size()]);
+	}
+
+	private void updateColumnwidthArray(List<Integer> widths) {
+		this.widths = widths.toArray(new Integer[widths.size()]);
+	}
+
+	public abstract String[] titileArray();
+
+	public abstract Integer[] columnwidthArray();
+
+	public static void main(String[] args) throws Exception {
+
+		WriteToExcel writeExcel = new clsWriteToExcel_Check("C:\\Temp_xml\\", "check");
+
+		writeExcel.writeDataToNextRow("1", "23", "dfdd");
+		writeExcel.writeDataToNextRow("1", "23", "dfdd");
+		writeExcel.writeDataToNextRow("1", "23", "dfdd");
+		writeExcel.writeDataToNextRow("1", "23", "dfdd");
+
+		writeExcel.updateColumnwidthArray(Arrays.asList(100, 100, 100, 100, 100));
+		writeExcel.updateTitileArray(Arrays.asList("NO.", "厂家", "ENBID", "eNodeB基站名称", "CELLID"));
+		writeExcel.creatNewSheet();
+
+		writeExcel.writeDataToNextRow("1", "23", "dfdd");
+		writeExcel.writeDataToNextRow("2", "23", "dfdd");
+		writeExcel.writeDataToNextRow("3", "23", "dfdd");
+
+		writeExcel.finishWrite();
+
+	}
+}
